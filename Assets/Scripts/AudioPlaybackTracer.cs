@@ -1,72 +1,56 @@
 using UnityEngine;
 
-/// <summary>
-/// Moves a sprite across the AudioBarChartBuilder's buildings in sync with
-/// music playback, using Unity's audio-thread clock (AudioSettings.dspTime)
-/// as the single source of truth for both starting playback and driving the
-/// tracer's position. Logs a sync check every second so drift can be caught.
-/// </summary>
+// Moves a sprite across AudioBarChartBuilder's buildings in sync with
+// playback, using AudioSettings.dspTime as the shared clock for both
+// starting playback and driving position. Follows chartBuilder's
+// DisplayedReadings, so motion holds/interpolates smoothly across any gap
+// left by dropped readings.
 [RequireComponent(typeof(SpriteRenderer))]
 public class AudioPlaybackTracer : MonoBehaviour
 {
     [Header("Playback")]
-    [Tooltip("The AudioSource that will play the same clip the bar chart was built from.")]
     public AudioSource audioSource;
 
-    [Tooltip("Seconds to wait (from when tracing starts) before playback and tracing begin together.")]
+    [Tooltip("Seconds to wait after StartTracing() before playback and tracing begin together.")]
     public double startDelay = 0.0;
 
-    [Tooltip("If true, scheduling begins automatically in Start(). If false, call StartTracing() yourself (e.g. from AudioBarChartBuilder once the bars exist).")]
+    [Tooltip("If false, call StartTracing() yourself instead of starting in Start().")]
     public bool autoPlayOnStart = false;
 
     [Header("Bar chart reference")]
-    [Tooltip("The builder that generated the buildings this sprite will trace over.")]
     public AudioBarChartBuilder chartBuilder;
 
     [Header("Motion")]
-    [Tooltip("Extra height above the current bar's top, in world units.")]
     public float heightOffset = 0.5f;
-    public float segmentDuration = 1f;
 
-    [Tooltip("If true, the sprite jumps discretely to each bar's exact top on the second. If false, it smoothly interpolates position and height between consecutive seconds.")]
+    [Tooltip("If true, the sprite jumps to each displayed bar and holds. If false, it interpolates position/height between bars.")]
     public bool snapToWholeSeconds = false;
 
     [Header("Lane alignment")]
-    [Tooltip("Manual X/Y nudge applied after computing the wave-based position. Useful for correcting a visual mismatch between this tracer's per-second height sampling and a smoothed wave line (e.g. AudioWaveBuilder's smoothCurve), so the tracer sits exactly on the lane instead of slightly off it.")]
+    [Tooltip("Manual X/Y nudge to correct mismatch against a smoothed wave line (e.g. AudioWaveBuilder).")]
     public Vector2 laneOffset = Vector2.zero;
 
     [Header("Blink effect")]
-    [Tooltip("If true, the sprite only appears briefly each time it reaches a new second, then hides until the next one — a blinking pulse instead of staying continuously visible while it moves/teleports.")]
+    [Tooltip("If true, the sprite only appears briefly at each new displayed bar instead of staying visible.")]
     public bool blinkMode = false;
-
-    [Tooltip("How long the sprite stays visible after appearing at a new second, in milliseconds.")]
     public float blinkVisibleMs = 150f;
 
     [Header("Sync verification")]
-    [Tooltip("Log a sync check line every second, comparing the dsp-clock song time against the AudioSource's actual sample position.")]
+    [Tooltip("Logs the dsp-clock song time against the AudioSource's sample position at each new displayed bar.")]
     public bool logSyncChecks = true;
-
-    [Tooltip("Drift beyond this many seconds logs a warning instead of a normal log.")]
     public float syncToleranceSeconds = 0.05f;
 
     private SpriteRenderer spriteRenderer;
-    private int totalSeconds;
     private double scheduledDspStartTime;
     private bool started = false;
-    private int lastLoggedSecond = -1;
-    private int lastBlinkSecond = -1;
+    private int lastLoggedDisplayedIndex = -1;
+    private int lastBlinkDisplayedIndex = -1;
     private float blinkElapsed = 0f;
     private bool blinkVisible = false;
 
-    /// <summary>True once BeginSyncedPlayback/StartTracing has scheduled playback.</summary>
     public bool IsStarted => started;
 
-    /// <summary>
-    /// The same dsp-clock-derived song time driving this tracer's position.
-    /// Other scripts (e.g. a scoring system) should read this instead of
-    /// keeping their own timer, so everything stays on one clock. Returns
-    /// -1 before playback has actually begun (still in the start delay).
-    /// </summary>
+    // -1 before playback has begun (still in the start delay).
     public double SongTime => started ? AudioSettings.dspTime - scheduledDspStartTime : -1;
 
     private void Awake()
@@ -83,35 +67,17 @@ public class AudioPlaybackTracer : MonoBehaviour
             return;
         }
 
-        totalSeconds = chartBuilder.analyzer.Readings.Count;
-        segmentDuration = chartBuilder.analyzer.segmentDuration;
-
         if (spriteRenderer != null) spriteRenderer.enabled = !blinkMode;
 
         if (autoPlayOnStart)
             StartTracing();
     }
 
-    /// <summary>
-    /// Convenience entry point for other scripts (e.g. AudioBarChartBuilder,
-    /// once it has finished building the bars) to kick off synced playback
-    /// using the configured startDelay.
-    /// </summary>
     public void StartTracing()
     {
-        if (chartBuilder != null && chartBuilder.analyzer != null && chartBuilder.analyzer.Readings != null)
-        {
-            totalSeconds = chartBuilder.analyzer.Readings.Count;
-            segmentDuration = chartBuilder.analyzer.segmentDuration;
-        }
-
         BeginSyncedPlayback(startDelay);
     }
 
-    /// <summary>
-    /// Schedules audio playback to start "delaySeconds" from now, using the
-    /// dsp clock as the reference point for both playback and tracer motion.
-    /// </summary>
     public void BeginSyncedPlayback(double delaySeconds)
     {
         if (audioSource == null)
@@ -120,12 +86,15 @@ public class AudioPlaybackTracer : MonoBehaviour
             return;
         }
 
+        if (chartBuilder != null && chartBuilder.analyzer != null && chartBuilder.analyzer.clip != null)
+            audioSource.clip = chartBuilder.analyzer.clip;
+
         double dspNow = AudioSettings.dspTime;
         scheduledDspStartTime = dspNow + delaySeconds;
         audioSource.PlayScheduled(scheduledDspStartTime);
         started = true;
-        lastLoggedSecond = -1;
-        lastBlinkSecond = -1;
+        lastLoggedDisplayedIndex = -1;
+        lastBlinkDisplayedIndex = -1;
         blinkVisible = false;
         if (spriteRenderer != null) spriteRenderer.enabled = !blinkMode;
 
@@ -134,37 +103,33 @@ public class AudioPlaybackTracer : MonoBehaviour
 
     private void Update()
     {
-        if (!started || totalSeconds == 0) return;
+        if (!started || chartBuilder == null || !chartBuilder.HasDisplayedReadings) return;
 
         double songTime = AudioSettings.dspTime - scheduledDspStartTime;
         if (songTime < 0) return;
 
         UpdatePosition(songTime);
 
-        int currentSegment = Mathf.Clamp(Mathf.FloorToInt((float)(songTime / segmentDuration)), 0, totalSeconds - 1);
+        if (!chartBuilder.TryGetCurrentDisplayedReading((float)songTime, out var reading, out int displayedIndex))
+            return;
 
         if (blinkMode)
-            HandleBlink(currentSegment);
+            HandleBlink(displayedIndex);
 
-        if (logSyncChecks && currentSegment != lastLoggedSecond)
+        if (logSyncChecks && displayedIndex != lastLoggedDisplayedIndex)
         {
-            lastLoggedSecond = currentSegment;
-            LogSyncCheck(currentSegment, songTime);
+            lastLoggedDisplayedIndex = displayedIndex;
+            LogSyncCheck(displayedIndex, reading, songTime);
         }
     }
 
-    /// <summary>
-    /// Shows the sprite the moment a new second is reached, then hides it
-    /// again after blinkVisibleMs — a pulse rather than a continuously
-    /// visible sprite gliding/teleporting between positions.
-    /// </summary>
-    private void HandleBlink(int currentSecond)
+    private void HandleBlink(int displayedIndex)
     {
         if (spriteRenderer == null) return;
 
-        if (currentSecond != lastBlinkSecond)
+        if (displayedIndex != lastBlinkDisplayedIndex)
         {
-            lastBlinkSecond = currentSecond;
+            lastBlinkDisplayedIndex = displayedIndex;
             blinkVisible = true;
             blinkElapsed = 0f;
             spriteRenderer.enabled = true;
@@ -184,26 +149,25 @@ public class AudioPlaybackTracer : MonoBehaviour
 
     private void UpdatePosition(double songTime)
     {
-        int index = Mathf.Clamp(Mathf.FloorToInt((float)(songTime / segmentDuration)), 0, totalSeconds - 1);
-        int nextIndex = Mathf.Clamp(index + 1, 0, totalSeconds - 1);
-        float frac = Mathf.Clamp01((float)((songTime - index * segmentDuration) / segmentDuration));
-
-        float xCurrent = index * chartBuilder.buildingSpacing;
-        float xNext = nextIndex * chartBuilder.buildingSpacing;
-
-        float heightCurrent = chartBuilder.groundY + chartBuilder.GetBlockCount(index) * chartBuilder.blockSize;
-        float heightNext = chartBuilder.groundY + chartBuilder.GetBlockCount(nextIndex) * chartBuilder.blockSize;
-
         float x, y;
+
         if (snapToWholeSeconds)
         {
-            x = xCurrent;
-            y = heightCurrent;
+            if (chartBuilder.TryGetCurrentDisplayedReading((float)songTime, out var reading, out _))
+            {
+                x = chartBuilder.GetWorldXAtTime(reading.timeSeconds);
+                y = chartBuilder.groundY + chartBuilder.GetBlockCountForReading(reading) * chartBuilder.blockSize;
+            }
+            else
+            {
+                x = chartBuilder.GetWorldXAtTime((float)songTime);
+                y = chartBuilder.groundY;
+            }
         }
         else
         {
-            x = Mathf.Lerp(xCurrent, xNext, frac);
-            y = Mathf.Lerp(heightCurrent, heightNext, frac);
+            x = chartBuilder.GetWorldXAtTime((float)songTime);
+            y = chartBuilder.GetHeightAtTime((float)songTime);
         }
 
         Vector3 pos = transform.position;
@@ -212,25 +176,17 @@ public class AudioPlaybackTracer : MonoBehaviour
         transform.position = pos;
     }
 
-    /// <summary>
-    /// Compares the dsp-clock-derived song time (used to drive the tracer)
-    /// against the AudioSource's own sample-accurate playback position, and
-    /// logs the reading the tracer is currently pointing at. If both clocks
-    /// agree within syncToleranceSeconds, this confirms the tracer is
-    /// pointing at the correct second's bar.
-    /// </summary>
-    private void LogSyncCheck(int second, double songTime)
+    private void LogSyncCheck(int displayedIndex, AudioPerSecondAnalyzer.SecondReading reading, double songTime)
     {
         if (audioSource == null || audioSource.clip == null) return;
 
         double audioSampleTime = (double)audioSource.timeSamples / audioSource.clip.frequency;
         double drift = songTime - audioSampleTime;
 
-        var reading = chartBuilder.analyzer.Readings[second];
-        int blockCount = chartBuilder.GetBlockCount(second);
+        int blockCount = chartBuilder.GetBlockCountForReading(reading);
         string status = Mathf.Abs((float)drift) > syncToleranceSeconds ? "DESYNC" : "OK";
 
-        string line = $"[SyncCheck] second={second} | dspSongTime={songTime:F3}s audioSampleTime={audioSampleTime:F3}s drift={drift * 1000:F1}ms | " +
+        string line = $"[SyncCheck] displayedIndex={displayedIndex} rawSecond={reading.second} readingTime={reading.timeSeconds:F2}s | dspSongTime={songTime:F3}s audioSampleTime={audioSampleTime:F3}s drift={drift * 1000:F1}ms | " +
                       $"reading: vol={reading.volumeDb}dB pitch={reading.pitchHz}Hz note={reading.noteName} blocks={blockCount} | tracerPos={transform.position} | {status}";
 
         if (status == "DESYNC")

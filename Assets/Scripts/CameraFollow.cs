@@ -9,11 +9,11 @@ public class CameraFollow : MonoBehaviour
     public float smoothTime = 0.15f;
     public Vector3 offset = new Vector3(0f, 1f, -10f);
     private Vector3 velocity = Vector3.zero;
-    private Camera cam;
+    private float targetY = 0f;
 
     void Awake()
     {
-        cam = GetComponent<Camera>();
+        if (target != null) targetY = target.position.y;
     }
 
     void LateUpdate()
@@ -26,7 +26,7 @@ public class CameraFollow : MonoBehaviour
             transform.position, desiredPosition, ref velocity, smoothTime
         );
 
-        transform.position = smoothedPosition;
+        transform.position = new Vector3(smoothedPosition.x, targetY + offset.y, smoothedPosition.z);
     }
 
 }

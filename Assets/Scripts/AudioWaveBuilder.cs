@@ -1,35 +1,25 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
-/// Draws a continuous 2D wave through the "top" point of each second,
-/// instead of AudioBarChartBuilder's stacked-block towers. Reuses the same
-/// AudioBarChartBuilder for its metric mapping (Volume/Pitch/Note, floor,
-/// ceiling, spacing) so both approaches stay driven by the same settings —
-/// this script just connects the tops with a line instead of building
-/// towers underneath them.
-/// </summary>
+// Draws a continuous wave through the "top" point of each second, using the
+// same AudioBarChartBuilder metric mapping/layout instead of building towers.
 [RequireComponent(typeof(LineRenderer))]
 public class AudioWaveBuilder : MonoBehaviour
 {
-    [Tooltip("The builder whose metric mapping (Volume/Pitch/Note) and layout (spacing, groundY, blockSize) define each point's height.")]
     public AudioBarChartBuilder chartBuilder;
 
     [Header("Line")]
     public float lineWidth = 0.15f;
-
-    [Tooltip("Assign a material for the LineRenderer (e.g. a URP/Unlit or Sprites/Default material). LineRenderer won't render without one.")]
     public Material lineMaterial;
 
-    [Tooltip("If true, interpolates a smooth curve through the per-second points (Catmull-Rom spline) instead of straight segments — an ECG-monitor look rather than a sharp zigzag.")]
+    [Tooltip("Catmull-Rom smoothing through the per-second points instead of straight segments.")]
     public bool smoothCurve = true;
 
-    [Tooltip("How many interpolated points to generate between each pair of consecutive seconds. Higher = smoother curve, more line/collider points.")]
     [Range(2, 30)]
     public int pointsPerSegment = 10;
 
     [Header("Collision")]
-    [Tooltip("If true, an EdgeCollider2D is generated along the same points, so the wave can be walked/collided on like a surface.")]
+    [Tooltip("Adds an EdgeCollider2D along the same points so the wave can be walked on.")]
     public bool addCollider = true;
 
     public PhysicsMaterial2D physicsMaterial;
@@ -68,9 +58,6 @@ public class AudioWaveBuilder : MonoBehaviour
         if (lineMaterial != null) lineRenderer.material = lineMaterial;
         lineRenderer.useWorldSpace = true;
 
-        // Uniform thickness along the whole line, regardless of any curve
-        // that might otherwise be set on widthCurve, plus rounded joins so
-        // corners don't show mitered/sharp artifacts.
         lineRenderer.widthCurve = AnimationCurve.Constant(0f, 1f, 1f);
         lineRenderer.widthMultiplier = lineWidth;
         lineRenderer.numCapVertices = 8;
@@ -95,12 +82,8 @@ public class AudioWaveBuilder : MonoBehaviour
         if (chartBuilder.playback != null) chartBuilder.playback.StartTracing();
     }
 
-    /// <summary>
-    /// Catmull-Rom spline interpolation through the given points, producing
-    /// a smooth curve that still passes exactly through every original
-    /// per-second point (unlike Bezier, which would only pass through
-    /// endpoints).
-    /// </summary>
+    // Catmull-Rom spline: passes exactly through every original point,
+    // unlike Bezier which only passes through endpoints.
     private static Vector3[] GenerateSmoothPoints(Vector3[] pts, int subdivisions)
     {
         if (pts.Length < 3) return pts;

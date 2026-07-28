@@ -1,15 +1,14 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
-/// <summary>
-/// Player-controlled ball: while the mouse button is held, the ball moves
-/// toward the mouse's world position. Its Y is clamped to a corridor around
-/// the wave curve (chartBuilder.GetHeightAtWorldX), so it can only travel
-/// along the wave's path rather than anywhere on screen. Every second, its
-/// distance to AudioPlaybackTracer is measured and scored, using the
-/// tracer's own synced clock (SongTime) rather than a separate timer, so
-/// scoring stays aligned with what's actually audible.
-/// </summary>
+// Player-controlled ball: X always tracks AudioPlaybackTracer's X; the
+// player controls height by clicking/tapping/dragging anywhere on screen.
+// Input snaps to the nearest valid block row, with a forgiveness window so
+// landing adjacent to the correct row still counts. Each second the ball's
+// height is compared to the tracer's using the tracer's synced clock: a
+// match within matchDistance scores, anything else scores 0.
 [RequireComponent(typeof(SpriteRenderer))]
 public class WaveBallController : MonoBehaviour
 {
@@ -17,119 +16,211 @@ public class WaveBallController : MonoBehaviour
     public AudioBarChartBuilder chartBuilder;
     public AudioPlaybackTracer tracer;
 
-    [Tooltip("Camera used to convert mouse screen position to world position. Defaults to Camera.main if left empty.")]
-    public Camera cam;
+    [Tooltip("Camera the bars are viewed through. Defaults to Camera.main.")]
+    public Camera gameCamera;
 
-    [Header("Movement")]
-    [Tooltip("World units per second the ball moves toward the mouse while the mouse button is held.")]
-    public float moveSpeed = 10f;
+    [Header("Screen height control")]
+    public float heightMoveSpeed = 15f;
 
-    [Tooltip("How far above/below the wave curve the ball is allowed to roam, in world units. The ball's Y is clamped to [waveY - pathHalfWidth, waveY + pathHalfWidth].")]
-    public float pathHalfWidth = 1.5f;
+    [Header("Snapping assist")]
+    public bool snapToRows = true;
 
-    [Header("Scoring bands")]
-    [Tooltip("Distance to the tracer at or under this earns scoreBandX (the top score).")]
-    public float distanceBandX = 0.5f;
-    public int scoreBandX = 100;
+    [Tooltip("If the snapped row is within this many blocks of the currently correct row, snap to the correct row instead. 0 disables forgiveness.")]
+    public int forgivenessBlocks = 1;
 
-    [Tooltip("Distance at or under this (but over Band X) earns scoreBandY.")]
-    public float distanceBandY = 1.0f;
-    public int scoreBandY = 50;
+    [Header("Scoring")]
+    [Tooltip("Vertical distance to the tracer at or under this counts as a match; otherwise scores 0.")]
+    public float matchDistance = 0.6f;
+    public int scoreMatch = 10;
 
-    [Tooltip("Distance at or under this (but over Band Y) earns scoreBandZ. Anything further scores 0.")]
-    public float distanceBandZ = 2.0f;
-    public int scoreBandZ = 10;
+    [Header("Feedback sprites")]
+    public Image gainsImage;
+    public Sprite greatSprite;
+    public Sprite perfectSprite;
+    public float gainsSpriteDuration = 0.6f;
+    public float jiggleAmount = 0.25f;
+    public float jiggleSpeed = 18f;
 
-    [Header("UI Display")]
-    public TextMeshProUGUI score;
-    public TextMeshProUGUI gains;
-
-    public int TotalScore { get; private set; }
-    public int MaxPossibleScore { get; private set; }
-    public string FinalGrade { get; private set; }
-    public bool SongFinished { get; private set; }
-
-    private int lastScoredSecond = -1;
+    private Coroutine gainsRoutine;
+    private float targetHeightY;
+    private bool targetInitialized = false;
+    private readonly HashSet<int> scoredDisplayedIndices = new HashSet<int>();
+    private int lastCheckedDisplayedIndex = -1;
+    private readonly HashSet<int> catchupRequiredIndices = new HashSet<int>();
 
     private void Update()
     {
         if (chartBuilder == null || chartBuilder.analyzer == null || chartBuilder.analyzer.Readings == null) return;
         if (tracer == null || !tracer.IsStarted) return;
-        if (cam == null) cam = Camera.main;
+        if (!chartBuilder.HasDisplayedReadings) return;
 
-        HandleMouseMovement();
-        ClampToPath();
+        if (gameCamera == null) gameCamera = Camera.main;
+        if (gameCamera == null) return;
+
+        if (!targetInitialized)
+        {
+            targetHeightY = transform.position.y;
+            targetInitialized = true;
+        }
+
+        HandleScreenInput();
+        FollowTracerX();
+        MoveTowardTargetHeight();
         HandleScoring();
     }
 
-    private void HandleMouseMovement()
+    private void HandleScreenInput()
     {
-        if (cam == null) return;
-
-        if (Input.GetMouseButton(0))
+        if (Input.touchCount > 0)
         {
-            Vector3 mouseWorld = cam.ScreenToWorldPoint(Input.mousePosition);
-            mouseWorld.z = transform.position.z;
-            transform.position = Vector3.MoveTowards(transform.position, mouseWorld, moveSpeed * Time.deltaTime);
+            UpdateTargetHeightFromScreenY(Input.GetTouch(0).position.y);
+        }
+        else if (Input.GetMouseButton(0))
+        {
+            UpdateTargetHeightFromScreenY(Input.mousePosition.y);
         }
     }
 
-    private void ClampToPath()
+    // Projects the chart's world-space min/max block heights into screen
+    // space (at the ball's own X/Z) and normalizes the tap against that
+    // range, so wherever the bars sit on screen maps correctly regardless
+    // of how much of the screen they occupy.
+    private void UpdateTargetHeightFromScreenY(float screenY)
     {
-        float waveY = chartBuilder.GetHeightAtWorldX(transform.position.x);
+        if (chartBuilder == null || gameCamera == null) return;
+
+        float minY = chartBuilder.groundY + chartBuilder.minBlocks * chartBuilder.blockSize;
+        float maxY = chartBuilder.groundY + chartBuilder.maxBlocks * chartBuilder.blockSize;
+
+        float screenYAtMin = gameCamera.WorldToScreenPoint(new Vector3(transform.position.x, minY, transform.position.z)).y;
+        float screenYAtMax = gameCamera.WorldToScreenPoint(new Vector3(transform.position.x, maxY, transform.position.z)).y;
+
+        float normalized = Mathf.Abs(screenYAtMax - screenYAtMin) > 0.0001f
+            ? Mathf.Clamp01(Mathf.InverseLerp(screenYAtMin, screenYAtMax, screenY))
+            : 0f;
+        float rawY = Mathf.Lerp(minY, maxY, normalized);
+
+        int snappedBlocks = chartBuilder.minBlocks;
+        if (snapToRows)
+        {
+            float rowsAboveGround = (rawY - chartBuilder.groundY) / chartBuilder.blockSize;
+            snappedBlocks = Mathf.Clamp(Mathf.RoundToInt(rowsAboveGround), chartBuilder.minBlocks, chartBuilder.maxBlocks);
+
+            if (forgivenessBlocks > 0 && TryGetCorrectBlockCount(out int correctBlocks))
+            {
+                if (Mathf.Abs(snappedBlocks - correctBlocks) <= forgivenessBlocks)
+                    snappedBlocks = correctBlocks;
+            }
+
+            rawY = chartBuilder.groundY + snappedBlocks * chartBuilder.blockSize;
+        }
+
+        float heightOffset = tracer != null ? tracer.heightOffset : 0f;
+        float laneOffsetY = tracer != null ? tracer.laneOffset.y : 0f;
+        targetHeightY = rawY + heightOffset + laneOffsetY;
+    }
+
+    private bool TryGetCorrectBlockCount(out int blockCount)
+    {
+        blockCount = 0;
+        if (tracer == null || !tracer.IsStarted) return false;
+
+        double songTime = tracer.SongTime;
+        if (songTime < 0) return false;
+        if (!chartBuilder.TryGetCurrentDisplayedReading((float)songTime, out var reading, out _)) return false;
+
+        blockCount = chartBuilder.GetBlockCountForReading(reading);
+        return true;
+    }
+
+    private void FollowTracerX()
+    {
         Vector3 pos = transform.position;
-        pos.y = Mathf.Clamp(pos.y, waveY - pathHalfWidth, waveY + pathHalfWidth);
+        pos.x = tracer.transform.position.x;
+        transform.position = pos;
+    }
+
+    private void MoveTowardTargetHeight()
+    {
+        Vector3 pos = transform.position;
+        pos.y = Mathf.MoveTowards(pos.y, targetHeightY, heightMoveSpeed * Time.deltaTime);
         transform.position = pos;
     }
 
     private void HandleScoring()
     {
-        double songTime = tracer.SongTime;
-        int totalSeconds = chartBuilder.analyzer.Readings.Count;
+        if (GameManager.Instance != null && GameManager.Instance.GameEnded) return;
+        if (tracer.SongTime < 0) return;
 
-        if (songTime < 0) return;
+        if (!chartBuilder.TryGetCurrentDisplayedReading((float)tracer.SongTime, out _, out int displayedIndex))
+            return;
 
-        int currentSecond = Mathf.Clamp(Mathf.FloorToInt((float)songTime), 0, totalSeconds - 1);
-        if (currentSecond != lastScoredSecond)
+        if (scoredDisplayedIndices.Contains(displayedIndex)) return;
+
+        float distance = Mathf.Abs(transform.position.y - tracer.transform.position.y);
+        bool isMatched = distance <= matchDistance;
+
+        if (displayedIndex != lastCheckedDisplayedIndex)
         {
-            lastScoredSecond = currentSecond;
-            ScoreSecond(currentSecond);
+            lastCheckedDisplayedIndex = displayedIndex;
+            if (!isMatched)
+            {
+                catchupRequiredIndices.Add(displayedIndex);
+                return;
+            }
+        }
+        else if (!isMatched)
+        {
+            return;
         }
 
-        if (!SongFinished && songTime >= totalSeconds)
+        bool neededCatchup = catchupRequiredIndices.Contains(displayedIndex);
+        int gained = neededCatchup ? GameManager.Instance.greatScore : GameManager.Instance.perfectScore;
+        string result = neededCatchup ? "great" : "perfect";
+
+        scoredDisplayedIndices.Add(displayedIndex);
+        catchupRequiredIndices.Remove(displayedIndex);
+
+        if (GameManager.Instance != null)
         {
-            SongFinished = true;
-            FinalizeGrade();
+            GameManager.Instance.AddScore(gained);
         }
+
+        ShowGainSprite(result);
+
+        Debug.Log($"[Score] displayedIndex={displayedIndex} result={result} gained={gained} distance={distance:F2}");
     }
 
-    private void ScoreSecond(int second)
+    private void ShowGainSprite(string result)
     {
-        float distance = Vector3.Distance(transform.position, tracer.transform.position);
+        if (gainsImage == null) return;
 
-        int gained;
-        if (distance <= distanceBandX) gained = scoreBandX;
-        else if (distance <= distanceBandY) gained = scoreBandY;
-        else if (distance <= distanceBandZ) gained = scoreBandZ;
-        else gained = 0;
+        Sprite sprite = result == "perfect" ? perfectSprite : greatSprite;
+        if (sprite == null) return;
 
-        TotalScore += gained;
-        MaxPossibleScore += scoreBandX;
-        score.text =TotalScore +"/"+ MaxPossibleScore;
-        gains.text = "+"+ gained;
-        Debug.Log($"[Score] second={second} distance={distance:F2} gained={gained} totalScore={TotalScore}/{MaxPossibleScore}");
+        gainsImage.sprite = sprite;
+        gainsImage.enabled = true;
+
+        if (gainsRoutine != null) StopCoroutine(gainsRoutine);
+        gainsRoutine = StartCoroutine(JiggleAndHide());
     }
 
-    private void FinalizeGrade()
+    private System.Collections.IEnumerator JiggleAndHide()
     {
-        float percent = MaxPossibleScore > 0 ? (TotalScore / (float)MaxPossibleScore) * 100f : 0f;
+        float elapsed = 0f;
+        Vector3 baseScale = Vector3.one;
+        gainsImage.rectTransform.localScale = baseScale;
 
-        if (percent >= 90f) FinalGrade = "A";
-        else if (percent >= 80f) FinalGrade = "B";
-        else if (percent >= 70f) FinalGrade = "C";
-        else if (percent >= 50f) FinalGrade = "D";
-        else FinalGrade = "F";
+        while (elapsed < gainsSpriteDuration)
+        {
+            elapsed += Time.deltaTime;
+            float damp = 1f - (elapsed / gainsSpriteDuration);
+            float wiggle = 1f + Mathf.Sin(elapsed * jiggleSpeed) * jiggleAmount * damp;
+            gainsImage.rectTransform.localScale = baseScale * wiggle;
+            yield return null;
+        }
 
-        Debug.Log($"[FinalGrade] score={TotalScore}/{MaxPossibleScore} ({percent:F1}%) grade={FinalGrade}");
+        gainsImage.enabled = false;
+        gainsImage.rectTransform.localScale = baseScale;
     }
 }

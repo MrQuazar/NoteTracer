@@ -3,52 +3,41 @@ using System.IO;
 using System.Text;
 using UnityEngine;
 
-/// <summary>
-/// Analyzes an AudioClip and produces one volume (dB) and pitch (Hz) reading
-/// per second, mirroring the browser-based per-second analysis.
-/// Works on any imported AudioClip, including MP3s imported into Unity
-/// (Unity decodes MP3/OGG/WAV itself at import time).
-/// </summary>
+// Produces one volume (dB) and pitch (Hz) reading per second from an
+// AudioClip, mirroring the browser-based per-second analysis.
 public class AudioPerSecondAnalyzer : MonoBehaviour
 {
     [System.Serializable]
     public struct SecondReading
     {
-        public int second;      // sequential segment index (0, 1, 2, ...), not necessarily whole real seconds
-        public float timeSeconds; // actual start time of this segment, in real seconds (= second * segmentDuration)
+        public int second;        // sequential segment index, not necessarily whole seconds
+        public float timeSeconds; // = second * segmentDuration
         public float volumeDb;
         public float pitchHz;
-        public int midiNote;   // -1 when no pitch was detected (silence/unvoiced)
+        public int midiNote;      // -1 when no pitch was detected
         public string noteName;
     }
 
-    [Tooltip("Assign an imported AudioClip (mp3/wav/ogg all work).")]
     public AudioClip clip;
     public AudioBarChartBuilder builder;
 
     [Header("Segment settings")]
-    [Tooltip("Length of each analyzed segment, in real seconds. 1.0 = one reading per second (default). 0.5 = one reading per half-second, for finer-grained data.")]
+    [Tooltip("Length of each analyzed segment, in seconds.")]
     public float segmentDuration = 1f;
 
     [Tooltip("Sample window used for pitch detection, taken from the middle of each segment.")]
     public int pitchWindowSize = 1024;
-
-    [Tooltip("Lowest pitch to detect, in Hz.")]
     public float minPitchHz = 55f;
-
-    [Tooltip("Highest pitch to detect, in Hz.")]
     public float maxPitchHz = 1500f;
 
     [Header("Export")]
-    [Tooltip("If true, Analyze() also writes a CSV of every reading to disk so you can inspect the raw data.")]
+    [Tooltip("Writes a CSV of every reading to disk when Analyze() runs.")]
     public bool exportToFile = true;
 
-    [Tooltip("Folder the CSV is written into. In the editor this is created under Assets/ so it shows up in the Project window; in a build it's written under persistentDataPath instead.")]
+    [Tooltip("Under Assets/ in the editor, persistentDataPath in a build.")]
     public string exportFolderName = "AudioAnalysisExports";
 
     public List<SecondReading> Readings { get; private set; } = new List<SecondReading>();
-
-    /// <summary>Full path of the most recently exported CSV, or null if nothing has been exported yet.</summary>
     public string LastExportPath { get; private set; }
 
     [ContextMenu("Analyze Clip")]
@@ -66,7 +55,6 @@ public class AudioPerSecondAnalyzer : MonoBehaviour
         int sampleRate = clip.frequency;
         int totalSamples = clip.samples;
 
-        // Pull all samples (interleaved across channels) and down-mix to mono.
         float[] raw = new float[totalSamples * channels];
         clip.GetData(raw, 0);
 
@@ -87,14 +75,12 @@ public class AudioPerSecondAnalyzer : MonoBehaviour
             int segStart = idx * samplesPerSegment;
             int segEnd = Mathf.Min(segStart + samplesPerSegment, totalSamples);
 
-            // --- Volume (RMS -> dB) ---
             double sumSquares = 0;
             for (int s = segStart; s < segEnd; s++)
                 sumSquares += mono[s] * mono[s];
             float rms = Mathf.Sqrt((float)(sumSquares / (segEnd - segStart)));
             float db = rms > 0f ? Mathf.Max(-60f, 20f * Mathf.Log10(rms)) : -60f;
 
-            // --- Pitch (autocorrelation on a window from the middle of the segment) ---
             int midStart = Mathf.Clamp(
                 (segStart + segEnd) / 2 - pitchWindowSize / 2,
                 segStart,
@@ -123,6 +109,11 @@ public class AudioPerSecondAnalyzer : MonoBehaviour
 
     void Start()
     {
+        // A clip already assigned in the Inspector is analyzed immediately;
+        // otherwise GameLevelSongLoader assigns it once the chosen song has
+        // loaded and calls Analyze()/builder.Build() itself.
+        if (clip == null) return;
+
         Analyze();
         if (Readings.Count > 0)
         {
@@ -130,11 +121,6 @@ public class AudioPerSecondAnalyzer : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Writes every reading to a CSV file (Second,VolumeDb,PitchHz,Note) so
-    /// the raw per-second data can be inspected outside Unity, or read back
-    /// in to drive design/game decisions (e.g. picking spawn thresholds).
-    /// </summary>
     [ContextMenu("Export Readings To File")]
     public void ExportReadingsToFile()
     {
@@ -171,11 +157,8 @@ public class AudioPerSecondAnalyzer : MonoBehaviour
 #endif
     }
 
-    /// <summary>
-    /// Simple time-domain autocorrelation pitch detector, restricted to a
-    /// plausible lag range for speed. Returns -1 if the window is too quiet
-    /// or no clear periodicity is found.
-    /// </summary>
+    // Time-domain autocorrelation, restricted to a plausible lag range.
+    // Returns -1 if the window is too quiet or has no clear periodicity.
     private static float AutoCorrelatePitch(float[] data, int offset, int size, int sampleRate, float minHz, float maxHz)
     {
         if (size < 8) return -1f;
@@ -216,7 +199,6 @@ public class AudioPerSecondAnalyzer : MonoBehaviour
 
     private static readonly string[] NoteNames = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
-    /// <summary>Converts a frequency in Hz to the nearest MIDI note number (A4 = 440Hz = 69).</summary>
     private static int FreqToMidi(float freq)
     {
         return Mathf.RoundToInt(69f + 12f * Mathf.Log(freq / 440f, 2f));

@@ -1,0 +1,122 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &9085493857575037994
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 8529702446651024835}
+  - component: {fileID: 1979180098960784168}
+  - component: {fileID: 6014682386140828242}
+  - component: {fileID: 1431061707799365165}
+  - component: {fileID: 2090079906853588292}
+  m_Layer: 0
+  m_Name: GameManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &8529702446651024835
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9085493857575037994}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1979180098960784168
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9085493857575037994}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 76428d93decefad4d8b00810e7184b3e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  tracer: {fileID: 0}
+  countdownText: {fileID: 0}
+  countFrom: 3
+  punchScale: 1.6
+  punchEaseDuration: 0.35
+  idlePulseAmplitude: 0.08
+  idlePulseSpeed: 6
+--- !u!114 &6014682386140828242
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9085493857575037994}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e99b512960394974697eb91f50c2577b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  tracer: {fileID: 0}
+  chartBuilder: {fileID: 0}
+  perfectScore: 10
+  greatScore: 8
+  scoreSlider: {fileID: 0}
+  gradeMarkers:
+  - grade: A
+    markerObject: {fileID: 0}
+    achievedHighlight: {fileID: 0}
+    thresholdPercentOverride: -1
+  - grade: B
+    markerObject: {fileID: 0}
+    achievedHighlight: {fileID: 0}
+    thresholdPercentOverride: -1
+  - grade: C
+    markerObject: {fileID: 0}
+    achievedHighlight: {fileID: 0}
+    thresholdPercentOverride: -1
+  endScreenPanel: {fileID: 0}
+  endGradeText: {fileID: 0}
+  endScoreText: {fileID: 0}
+  retryButton: {fileID: 0}
+  mainMenuButton: {fileID: 0}
+  mainMenuSceneName: MainMenu
+  gradeAThreshold: 90
+  gradeBThreshold: 75
+  gradeCThreshold: 50
+--- !u!114 &1431061707799365165
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9085493857575037994}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 696f32b5e394e994ea0374d78373a777, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+--- !u!114 &2090079906853588292
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 9085493857575037994}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4bc6e165b802af141bb855e4ff8f369b, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  analyzer: {fileID: 0}
+  fallbackClipForTesting: {fileID: 8300000, guid: 8b005b04846fd0a4c8953443c8fe15bf, type: 3}
+  loadingText: {fileID: 0}
